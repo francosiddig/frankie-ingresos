@@ -8,7 +8,6 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f3; color: #1a1a1a; min-height: 100vh; padding: 1.5rem 1rem; }
   .container { max-width: 680px; margin: 0 auto; }
-  h1 { font-size: 20px; font-weight: 500; margin-bottom: 1.5rem; color: #1a1a1a; }
   .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
   .clock { font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums; }
   .fecha { font-size: 13px; color: #888; margin-top: 2px; }
@@ -41,7 +40,9 @@
   .emp-chip button { background: none; border: none; cursor: pointer; color: #888; font-size: 15px; padding: 0; line-height: 1; }
   .emp-chip button:hover { color: #A32D2D; background: none; }
   .vacio { padding: 2rem; text-align: center; color: #aaa; font-size: 14px; }
-  .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #1D9E75; color: white; font-size: 13px; padding: 8px 20px; border-radius: 20px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 999; }
+  .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); font-size: 13px; padding: 8px 20px; border-radius: 20px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 999; }
+  .toast.ok { background: #1D9E75; color: white; }
+  .toast.warn { background: #A32D2D; color: white; }
   .toast.show { opacity: 1; }
   .screen { display: none; }
   .screen.active { display: block; }
@@ -142,23 +143,47 @@ let selIdx = -1;
 let cargando = false;
 
 function pad(n){ return String(n).padStart(2,'0'); }
+
+function horaDeTimestamp(ts){
+  const d = new Date(ts);
+  if(isNaN(d.getTime()) || d.getFullYear() < 2020) return null;
+  return pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+}
+
 function horaStr(){ const d=new Date(); return pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds()); }
+
 function fechaStr(){
   const d=new Date();
   const dias=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
   const meses=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
   return dias[d.getDay()]+' '+d.getDate()+' de '+meses[d.getMonth()]+' '+d.getFullYear();
 }
-function esTarde(hora){ const [h,m]=hora.split(':').map(Number); return h>9||(h===9&&m>0); }
-function minTarde(hora){ const [h,m]=hora.split(':').map(Number); return esTarde(hora)?(h-9)*60+m:0; }
-function guardarEmpleados(){ try{ localStorage.setItem('frankie_empleados',JSON.stringify(empleados)); }catch(e){} }
 
+function esTarde(hora){
+  if(!hora) return false;
+  const [h,m]=hora.split(':').map(Number);
+  return h>9||(h===9&&m>0);
+}
+
+function minTarde(hora){
+  if(!hora) return 0;
+  const [h,m]=hora.split(':').map(Number);
+  return esTarde(hora)?(h-9)*60+m:0;
+}
+
+function guardarEmpleados(){ try{ localStorage.setItem('frankie_empleados',JSON.stringify(empleados)); }catch(e){} }
 function setSyncStatus(txt,color){ const el=document.getElementById('sync-status'); el.textContent=txt; el.style.color=color||'#888'; }
 
-function showToast(msg){
+function showToast(msg, tipo){
   const t=document.getElementById('toast');
-  t.textContent=msg; t.classList.add('show');
+  t.textContent=msg;
+  t.className='toast '+(tipo||'ok')+' show';
   setTimeout(()=>t.classList.remove('show'),2500);
+}
+
+function normalizar(r){
+  const horaReal = horaDeTimestamp(r.timestamp);
+  return { ...r, horaReal };
 }
 
 async function cargarDesdeSheets(){
@@ -166,7 +191,9 @@ async function cargarDesdeSheets(){
   try {
     const res=await fetch(SCRIPT_URL);
     const data=await res.json();
-    todosRegistros=data.filter(r=>r.timestamp&&r.nombre&&r.hora);
+    todosRegistros = data
+      .filter(r=>r.timestamp && r.nombre && new Date(r.timestamp).getFullYear() >= 2020)
+      .map(normalizar);
     const hoy=new Date().toDateString();
     registrosHoy=todosRegistros.filter(r=>new Date(r.timestamp).toDateString()===hoy);
     setSyncStatus('✓ Sincronizado','#3B6D11');
@@ -174,10 +201,21 @@ async function cargarDesdeSheets(){
   } catch(e){ setSyncStatus('Sin conexión','#A32D2D'); }
 }
 
+function yaRegistradoHoy(nombre){
+  return registrosHoy.some(r=>r.nombre.toLowerCase()===nombre.toLowerCase());
+}
+
 async function registrar(nombre){
   const inp=document.getElementById('inp');
   const n=(nombre||inp.value).trim();
   if(!n||cargando) return;
+
+  if(yaRegistradoHoy(n)){
+    showToast(n+' ya fue registrado/a hoy','warn');
+    inp.value=''; ocultarSugg(); inp.focus();
+    return;
+  }
+
   cargando=true;
   inp.value=''; ocultarSugg();
   const d=new Date();
@@ -186,12 +224,13 @@ async function registrar(nombre){
   setSyncStatus('Guardando...','#BA7517');
   try {
     await fetch(SCRIPT_URL,{ method:'POST', body:JSON.stringify(row) });
-    todosRegistros.push(row);
-    registrosHoy.push(row);
+    const rowNorm = normalizar(row);
+    todosRegistros.push(rowNorm);
+    registrosHoy.push(rowNorm);
     setSyncStatus('✓ Sincronizado','#3B6D11');
-    showToast(n+' registrado/a — '+hora);
+    showToast(n+' registrado/a — '+hora,'ok');
     render();
-  } catch(e){ setSyncStatus('Error al guardar','#A32D2D'); }
+  } catch(e){ setSyncStatus('Error al guardar','#A32D2D'); showToast('Error al guardar, reintentá','warn'); }
   cargando=false;
   inp.focus();
 }
@@ -203,11 +242,12 @@ function render(){
   else {
     vacio.style.display='none';
     lista.innerHTML=[...registrosHoy].reverse().map(r=>{
-      const tag=esTarde(r.hora)?'<span class="tag-tarde">Tarde</span>':'<span class="tag-ok">A tiempo</span>';
-      return `<div class="row"><span style="font-weight:500;">${r.nombre}</span><span style="color:#888;font-variant-numeric:tabular-nums;">${r.hora}</span><span>${tag}</span></div>`;
+      const hora = r.horaReal || r.hora;
+      const tag=esTarde(hora)?'<span class="tag-tarde">Tarde</span>':'<span class="tag-ok">A tiempo</span>';
+      return `<div class="row"><span style="font-weight:500;">${r.nombre}</span><span style="color:#888;font-variant-numeric:tabular-nums;">${hora}</span><span>${tag}</span></div>`;
     }).join('');
   }
-  const nT=registrosHoy.filter(r=>esTarde(r.hora)).length;
+  const nT=registrosHoy.filter(r=>esTarde(r.horaReal||r.hora)).length;
   document.getElementById('total').textContent=registrosHoy.length;
   document.getElementById('atiempo').textContent=registrosHoy.length-nT;
   document.getElementById('tarde').textContent=nT;
@@ -273,6 +313,7 @@ function poblarSelectorMes(){
   const meses={};
   todosRegistros.forEach(r=>{
     const d=new Date(r.timestamp);
+    if(d.getFullYear()<2020) return;
     const key=d.getFullYear()+'-'+pad(d.getMonth()+1);
     meses[key]=d.toLocaleString('es-AR',{month:'long',year:'numeric'});
   });
@@ -286,13 +327,23 @@ function renderResumen(){
   const sel=document.getElementById('sel-mes').value;
   if(!sel) return;
   const [anio,mes]=sel.split('-').map(Number);
-  const delMes=todosRegistros.filter(r=>{ const d=new Date(r.timestamp); return d.getFullYear()===anio&&d.getMonth()+1===mes; });
+  const delMes=todosRegistros.filter(r=>{
+    const d=new Date(r.timestamp);
+    return d.getFullYear()===anio&&d.getMonth()+1===mes;
+  });
+
   const porEmp={};
   delMes.forEach(r=>{
+    const hora=r.horaReal||r.hora;
     if(!porEmp[r.nombre]) porEmp[r.nombre]={ dias:0, tardanzas:[], minsTotales:0 };
     porEmp[r.nombre].dias++;
-    if(esTarde(r.hora)){ const mins=minTarde(r.hora); porEmp[r.nombre].tardanzas.push({fecha:new Date(r.timestamp),hora:r.hora,mins}); porEmp[r.nombre].minsTotales+=mins; }
+    if(esTarde(hora)){
+      const mins=minTarde(hora);
+      porEmp[r.nombre].tardanzas.push({fecha:new Date(r.timestamp),hora,mins});
+      porEmp[r.nombre].minsTotales+=mins;
+    }
   });
+
   const tabla=document.getElementById('tabla-resumen');
   const nombres=Object.keys(porEmp).sort();
   if(!nombres.length){ tabla.innerHTML='<div class="vacio">Sin registros para este mes</div>'; }
@@ -305,17 +356,19 @@ function renderResumen(){
       return `<div class="res-row"><span style="font-weight:500;">${n}</span><span style="color:#888;">${e.dias}</span><span style="color:${color};font-weight:500;">${nT}${totalLabel?' · '+totalLabel:''}</span><span style="color:#888;font-size:12px;">${detalle}</span></div>`;
     }).join('');
   }
+
   const detalle=document.getElementById('detalle-mes');
   detalle.innerHTML=[...delMes].sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp)).map(r=>{
     const d=new Date(r.timestamp);
-    const tag=esTarde(r.hora)?'<span class="tag-tarde">Tarde</span>':'<span class="tag-ok">A tiempo</span>';
-    return `<div class="det-row"><span style="color:#888;">${pad(d.getDate())}/${pad(d.getMonth()+1)}</span><span style="font-weight:500;">${r.nombre}</span><span style="color:#888;font-variant-numeric:tabular-nums;">${r.hora}</span><span>${tag}</span></div>`;
+    const hora=r.horaReal||r.hora;
+    const tag=esTarde(hora)?'<span class="tag-tarde">Tarde</span>':'<span class="tag-ok">A tiempo</span>';
+    return `<div class="det-row"><span style="color:#888;">${pad(d.getDate())}/${pad(d.getMonth()+1)}</span><span style="font-weight:500;">${r.nombre}</span><span style="color:#888;font-variant-numeric:tabular-nums;">${hora}</span><span>${tag}</span></div>`;
   }).join('')||'<div class="vacio">Sin registros</div>';
 }
 
 function exportarDia(){
   if(!registrosHoy.length){ alert('No hay registros para exportar'); return; }
-  const csv='Nombre,Hora,Estado\n'+registrosHoy.map(r=>`${r.nombre},${r.hora},${esTarde(r.hora)?'Tarde':'A tiempo'}`).join('\n');
+  const csv='Nombre,Hora,Estado\n'+registrosHoy.map(r=>{ const hora=r.horaReal||r.hora; return `${r.nombre},${hora},${esTarde(hora)?'Tarde':'A tiempo'}`; }).join('\n');
   descargar(csv,`ingresos_${new Date().toISOString().slice(0,10)}.csv`);
 }
 function exportarResumen(){
@@ -323,7 +376,10 @@ function exportarResumen(){
   const [anio,mes]=sel.split('-').map(Number);
   const delMes=todosRegistros.filter(r=>{ const d=new Date(r.timestamp); return d.getFullYear()===anio&&d.getMonth()+1===mes; });
   if(!delMes.length){ alert('Sin registros para exportar'); return; }
-  const csv='Fecha,Empleado,Hora,Estado\n'+[...delMes].sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp)).map(r=>{ const d=new Date(r.timestamp); return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()},${r.nombre},${r.hora},${esTarde(r.hora)?'Tarde':'A tiempo'}`; }).join('\n');
+  const csv='Fecha,Empleado,Hora,Estado\n'+[...delMes].sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp)).map(r=>{
+    const d=new Date(r.timestamp); const hora=r.horaReal||r.hora;
+    return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()},${r.nombre},${hora},${esTarde(hora)?'Tarde':'A tiempo'}`;
+  }).join('\n');
   descargar(csv,`resumen_${sel}.csv`);
 }
 function descargar(csv,nombre){ const a=document.createElement('a'); a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv); a.download=nombre; a.click(); }
