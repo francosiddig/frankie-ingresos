@@ -11,13 +11,20 @@
   .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
   .clock { font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums; }
   .fecha { font-size: 13px; color: #888; margin-top: 2px; }
-  .sync { font-size: 11px; color: #888; }
-  .input-row { display: flex; gap: 10px; margin-bottom: 1.5rem; position: relative; }
+  .sync { font-size: 11px; }
+  .input-row { display: flex; gap: 10px; margin-bottom: 1rem; position: relative; }
   input[type=text] { font-size: 16px; padding: 10px 14px; border: 1.5px solid #ddd; border-radius: 8px; background: #fff; color: #1a1a1a; outline: none; flex: 1; }
   input[type=text]:focus { border-color: #378ADD; box-shadow: 0 0 0 3px rgba(55,138,221,0.15); }
   button { font-size: 14px; padding: 10px 18px; border: 1px solid #ccc; border-radius: 8px; background: #fff; color: #1a1a1a; cursor: pointer; white-space: nowrap; }
   button:hover { background: #f0f0ee; }
   button:active { transform: scale(0.98); }
+  .btn-turno { background: #1a1a1a; color: #fff; border-color: #1a1a1a; width: 100%; margin-bottom: 1rem; }
+  .btn-turno:hover { background: #333; }
+  .btn-turno-activo { background: #1D9E75; color: #fff; border-color: #1D9E75; width: 100%; margin-bottom: 1rem; }
+  .btn-turno-activo:hover { background: #178a64; }
+  .btn-turno-usado { background: #f5f5f3; color: #aaa; border-color: #ddd; width: 100%; margin-bottom: 1rem; cursor: not-allowed; }
+  .btn-turno-usado:hover { background: #f5f5f3; }
+  .turno-banner { background: #EAF3DE; border: 1px solid #C0DD97; border-radius: 8px; padding: 8px 14px; font-size: 13px; color: #3B6D11; margin-bottom: 1rem; display: none; }
   .sugerencias { display: none; position: absolute; top: 46px; left: 0; right: 80px; background: #fff; border: 1px solid #ddd; border-radius: 8px; z-index: 10; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
   .sugg-item { padding: 10px 14px; cursor: pointer; font-size: 15px; border-bottom: 1px solid #f0f0ee; }
   .sugg-item:last-child { border-bottom: none; }
@@ -71,6 +78,9 @@
 
 <div id="screen-registro" class="screen active">
 
+  <button id="btn-turno" class="btn-turno" onclick="abrirTurno()">🟢 Abrir turno</button>
+  <div id="turno-banner" class="turno-banner"></div>
+
   <div class="input-row">
     <input id="inp" type="text" placeholder="Escribí el nombre..." autocomplete="off" />
     <button onclick="registrar()">✓ Registrar</button>
@@ -112,14 +122,12 @@
     <select id="sel-mes" onchange="renderResumen()" style="margin-left:auto;"></select>
     <button onclick="exportarResumen()">⬇ Exportar</button>
   </div>
-
   <div class="card" style="margin-bottom:1rem;">
     <div class="res-row thead" style="background:#f5f5f3;font-size:12px;color:#888;font-weight:500;">
       <span>Empleado</span><span>Días</span><span>Tardanzas</span><span>Detalle</span>
     </div>
     <div id="tabla-resumen"></div>
   </div>
-
   <p style="font-size:13px;font-weight:500;margin-bottom:8px;">Todos los ingresos del mes</p>
   <div class="card">
     <div class="det-row" style="background:#f5f5f3;font-size:12px;color:#888;font-weight:500;">
@@ -135,23 +143,21 @@
 const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzL02vidfW_YfVL-FY2onWaecBckUDE2FlDF6kirspZqZPLg-bc96tOHCZ0IAVczmhu/exec';
 const CLAVE = '091218';
 const EMPLEADOS_DEFAULT = ['Yessi','Matias','Diana','Flor Sodero','Gonzalo','Ariel','Cristian','Yuli','Isabel','Anto','Cinthia','Luzmar','Yeri','Renso','Melody'];
+const MINUTOS_TURNO = 5;
+const TARDE_H = 9;
+const TARDE_M = 10;
 
 let empleados = JSON.parse(localStorage.getItem('frankie_empleados') || 'null') || [...EMPLEADOS_DEFAULT];
 let registrosHoy = [];
 let todosRegistros = [];
 let selIdx = -1;
 let cargando = false;
+let turnoHora = null;
+let turnoExpira = null;
+let turnoTimer = null;
 
 function pad(n){ return String(n).padStart(2,'0'); }
-
-function horaDeTimestamp(ts){
-  const d = new Date(ts);
-  if(isNaN(d.getTime()) || d.getFullYear() < 2020) return null;
-  return pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
-}
-
 function horaStr(){ const d=new Date(); return pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds()); }
-
 function fechaStr(){
   const d=new Date();
   const dias=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
@@ -159,41 +165,96 @@ function fechaStr(){
   return dias[d.getDay()]+' '+d.getDate()+' de '+meses[d.getMonth()]+' '+d.getFullYear();
 }
 
-function esTarde(hora){
-  if(!hora) return false;
-  const [h,m]=hora.split(':').map(Number);
-  return h>9||(h===9&&m>0);
+function claveTurnoHoy(){
+  const d=new Date();
+  return 'frankie_turno_'+d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate());
+}
+function turnoUsadoHoy(){ return !!localStorage.getItem(claveTurnoHoy()); }
+function marcarTurnoUsado(){ localStorage.setItem(claveTurnoHoy(), '1'); }
+
+function normalizar(r){
+  let horaReal = r.hora || null;
+  if(!horaReal || !/^\d{2}:\d{2}(:\d{2})?$/.test(horaReal)){
+    const d = new Date(r.timestamp);
+    horaReal = (d.getFullYear() >= 2020) ? pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds()) : null;
+  }
+  return { ...r, horaReal };
 }
 
+function esTarde(hora){
+  if(!hora) return false;
+  const [h,m] = hora.split(':').map(Number);
+  return h > TARDE_H || (h === TARDE_H && m >= TARDE_M);
+}
 function minTarde(hora){
-  if(!hora) return 0;
-  const [h,m]=hora.split(':').map(Number);
-  return esTarde(hora)?(h-9)*60+m:0;
+  if(!hora || !esTarde(hora)) return 0;
+  const [h,m] = hora.split(':').map(Number);
+  return (h - TARDE_H)*60 + (m - TARDE_M);
 }
 
 function guardarEmpleados(){ try{ localStorage.setItem('frankie_empleados',JSON.stringify(empleados)); }catch(e){} }
 function setSyncStatus(txt,color){ const el=document.getElementById('sync-status'); el.textContent=txt; el.style.color=color||'#888'; }
+function showToast(msg,tipo){ const t=document.getElementById('toast'); t.textContent=msg; t.className='toast '+(tipo||'ok')+' show'; setTimeout(()=>t.classList.remove('show'),2500); }
 
-function showToast(msg, tipo){
-  const t=document.getElementById('toast');
-  t.textContent=msg;
-  t.className='toast '+(tipo||'ok')+' show';
-  setTimeout(()=>t.classList.remove('show'),2500);
+function abrirTurno(){
+  if(turnoUsadoHoy()){ showToast('El turno ya fue abierto hoy','warn'); return; }
+  const ahora=new Date();
+  const horaActual=ahora.getHours()*60+ahora.getMinutes();
+  const limiteMinutos=TARDE_H*60+TARDE_M;
+  if(horaActual>=limiteMinutos){ showToast('El turno solo se puede abrir antes de las 9:10','warn'); return; }
+  turnoHora=pad(ahora.getHours())+':'+pad(ahora.getMinutes())+':'+pad(ahora.getSeconds());
+  turnoExpira=ahora.getTime()+MINUTOS_TURNO*60*1000;
+  marcarTurnoUsado();
+  if(turnoTimer) clearInterval(turnoTimer);
+  turnoTimer=setInterval(tickTurno,1000);
+  tickTurno();
+  document.getElementById('inp').focus();
 }
 
-function normalizar(r){
-  const horaReal = horaDeTimestamp(r.timestamp);
-  return { ...r, horaReal };
+function tickTurno(){
+  const banner=document.getElementById('turno-banner');
+  const btn=document.getElementById('btn-turno');
+  if(!turnoHora||Date.now()>turnoExpira){
+    turnoHora=null; turnoExpira=null;
+    if(turnoTimer){ clearInterval(turnoTimer); turnoTimer=null; }
+    banner.style.display='none';
+    btn.textContent='✓ Turno ya utilizado hoy';
+    btn.className='btn-turno-usado';
+    btn.onclick=null;
+    return;
+  }
+  const segsRestantes=Math.ceil((turnoExpira-Date.now())/1000);
+  const mins=Math.floor(segsRestantes/60);
+  const segs=segsRestantes%60;
+  banner.style.display='block';
+  banner.textContent=`Turno activo — hora fija ${turnoHora} (cierra en ${mins}:${pad(segs)})`;
+  btn.textContent='⏱ Turno activo';
+  btn.className='btn-turno-activo';
+  btn.onclick=null;
+}
+
+function horaParaRegistro(){
+  if(turnoHora&&turnoExpira&&Date.now()<=turnoExpira) return turnoHora;
+  const d=new Date();
+  return pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+}
+
+function restaurarEstadoTurno(){
+  const btn=document.getElementById('btn-turno');
+  if(turnoUsadoHoy()&&!turnoHora){
+    btn.textContent='✓ Turno ya utilizado hoy';
+    btn.className='btn-turno-usado';
+    btn.onclick=null;
+  }
 }
 
 async function cargarDesdeSheets(){
+  if(cargando) return;
   setSyncStatus('Cargando...','#BA7517');
   try {
     const res=await fetch(SCRIPT_URL);
     const data=await res.json();
-    todosRegistros = data
-      .filter(r=>r.timestamp && r.nombre && new Date(r.timestamp).getFullYear() >= 2020)
-      .map(normalizar);
+    todosRegistros=data.filter(r=>r.timestamp&&r.nombre&&new Date(r.timestamp).getFullYear()>=2020).map(normalizar);
     const hoy=new Date().toDateString();
     registrosHoy=todosRegistros.filter(r=>new Date(r.timestamp).toDateString()===hoy);
     setSyncStatus('✓ Sincronizado','#3B6D11');
@@ -201,32 +262,23 @@ async function cargarDesdeSheets(){
   } catch(e){ setSyncStatus('Sin conexión','#A32D2D'); }
 }
 
-function yaRegistradoHoy(nombre){
-  return registrosHoy.some(r=>r.nombre.toLowerCase()===nombre.toLowerCase());
-}
+function yaRegistradoHoy(nombre){ return registrosHoy.some(r=>r.nombre.toLowerCase()===nombre.toLowerCase()); }
 
 async function registrar(nombre){
   const inp=document.getElementById('inp');
   const n=(nombre||inp.value).trim();
   if(!n||cargando) return;
-
-  if(yaRegistradoHoy(n)){
-    showToast(n+' ya fue registrado/a hoy','warn');
-    inp.value=''; ocultarSugg(); inp.focus();
-    return;
-  }
-
+  if(yaRegistradoHoy(n)){ showToast(n+' ya fue registrado/a hoy','warn'); inp.value=''; ocultarSugg(); inp.focus(); return; }
   cargando=true;
   inp.value=''; ocultarSugg();
   const d=new Date();
-  const hora=pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+  const hora=horaParaRegistro();
   const row={ timestamp:d.toISOString(), nombre:n, hora, tarde:esTarde(hora)?'Tarde':'A tiempo' };
   setSyncStatus('Guardando...','#BA7517');
   try {
     await fetch(SCRIPT_URL,{ method:'POST', body:JSON.stringify(row) });
-    const rowNorm = normalizar(row);
-    todosRegistros.push(rowNorm);
-    registrosHoy.push(rowNorm);
+    const rowNorm={ ...row, horaReal:hora };
+    todosRegistros.push(rowNorm); registrosHoy.push(rowNorm);
     setSyncStatus('✓ Sincronizado','#3B6D11');
     showToast(n+' registrado/a — '+hora,'ok');
     render();
@@ -242,7 +294,7 @@ function render(){
   else {
     vacio.style.display='none';
     lista.innerHTML=[...registrosHoy].reverse().map(r=>{
-      const hora = r.horaReal || r.hora;
+      const hora=r.horaReal||r.hora;
       const tag=esTarde(hora)?'<span class="tag-tarde">Tarde</span>':'<span class="tag-ok">A tiempo</span>';
       return `<div class="row"><span style="font-weight:500;">${r.nombre}</span><span style="color:#888;font-variant-numeric:tabular-nums;">${hora}</span><span>${tag}</span></div>`;
     }).join('');
@@ -253,33 +305,12 @@ function render(){
   document.getElementById('tarde').textContent=nT;
 }
 
-function agregarEmp(){
-  const inp=document.getElementById('nuevo-emp');
-  const n=inp.value.trim();
-  if(!n||empleados.includes(n)) return;
-  empleados.push(n); guardarEmpleados(); inp.value=''; renderChips();
-}
+function agregarEmp(){ const inp=document.getElementById('nuevo-emp'); const n=inp.value.trim(); if(!n||empleados.includes(n)) return; empleados.push(n); guardarEmpleados(); inp.value=''; renderChips(); }
 function quitarEmp(i){ if(!confirm('¿Quitar a '+empleados[i]+'?')) return; empleados.splice(i,1); guardarEmpleados(); renderChips(); }
-function renderChips(){
-  document.getElementById('chips').innerHTML=empleados.map((e,i)=>
-    `<span class="emp-chip">${e}<button onclick="quitarEmp(${i})">×</button></span>`
-  ).join('');
-}
-function togglePanel(){
-  const p=document.getElementById('panel-emp');
-  p.style.display=p.style.display==='none'||p.style.display===''?'block':'none';
-  if(p.style.display==='block') renderChips();
-}
+function renderChips(){ document.getElementById('chips').innerHTML=empleados.map((e,i)=>`<span class="emp-chip">${e}<button onclick="quitarEmp(${i})">×</button></span>`).join(''); }
+function togglePanel(){ const p=document.getElementById('panel-emp'); p.style.display=(p.style.display==='none'||p.style.display==='')?'block':'none'; if(p.style.display==='block') renderChips(); }
 
-function mostrarSugg(txt){
-  const box=document.getElementById('sugerencias');
-  if(!txt){ ocultarSugg(); return; }
-  const matches=empleados.filter(e=>e.toLowerCase().startsWith(txt.toLowerCase()));
-  if(!matches.length){ ocultarSugg(); return; }
-  selIdx=-1;
-  box.innerHTML=matches.map((e,i)=>`<div class="sugg-item" data-idx="${i}" onmousedown="elegir('${e.replace(/'/g,"\\'")}')">${e}</div>`).join('');
-  box.style.display='block';
-}
+function mostrarSugg(txt){ const box=document.getElementById('sugerencias'); if(!txt){ ocultarSugg(); return; } const matches=empleados.filter(e=>e.toLowerCase().startsWith(txt.toLowerCase())); if(!matches.length){ ocultarSugg(); return; } selIdx=-1; box.innerHTML=matches.map((e,i)=>`<div class="sugg-item" data-idx="${i}" onmousedown="elegir('${e.replace(/'/g,"\\'")}')">${e}</div>`).join(''); box.style.display='block'; }
 function ocultarSugg(){ document.getElementById('sugerencias').style.display='none'; selIdx=-1; }
 function elegir(nombre){ document.getElementById('inp').value=nombre; ocultarSugg(); registrar(nombre); }
 
@@ -291,32 +322,16 @@ document.getElementById('inp').addEventListener('keydown',e=>{
   else if(e.key==='Enter'){ if(selIdx>=0&&items[selIdx]) elegir(items[selIdx].textContent); else{ registrar(); ocultarSugg(); } }
   else if(e.key==='Escape') ocultarSugg();
 });
-document.getElementById('inp').addEventListener('blur',()=>{ setTimeout(ocultarSugg,150); });
+document.getElementById('inp').addEventListener('blur',()=>setTimeout(ocultarSugg,150));
 document.getElementById('nuevo-emp').addEventListener('keydown',e=>{ if(e.key==='Enter') agregarEmp(); });
 
-function pedirClave(){
-  const c=prompt('Ingresá la clave:');
-  if(c===CLAVE) mostrarResumen();
-  else if(c!==null) alert('Clave incorrecta');
-}
-function mostrarResumen(){
-  document.getElementById('screen-registro').classList.remove('active');
-  document.getElementById('screen-resumen').classList.add('active');
-  poblarSelectorMes(); renderResumen();
-}
-function volverRegistro(){
-  document.getElementById('screen-resumen').classList.remove('active');
-  document.getElementById('screen-registro').classList.add('active');
-}
+function pedirClave(){ const c=prompt('Ingresá la clave:'); if(c===CLAVE) mostrarResumen(); else if(c!==null) alert('Clave incorrecta'); }
+function mostrarResumen(){ document.getElementById('screen-registro').classList.remove('active'); document.getElementById('screen-resumen').classList.add('active'); poblarSelectorMes(); renderResumen(); }
+function volverRegistro(){ document.getElementById('screen-resumen').classList.remove('active'); document.getElementById('screen-registro').classList.add('active'); }
 
 function poblarSelectorMes(){
   const meses={};
-  todosRegistros.forEach(r=>{
-    const d=new Date(r.timestamp);
-    if(d.getFullYear()<2020) return;
-    const key=d.getFullYear()+'-'+pad(d.getMonth()+1);
-    meses[key]=d.toLocaleString('es-AR',{month:'long',year:'numeric'});
-  });
+  todosRegistros.forEach(r=>{ const d=new Date(r.timestamp); if(d.getFullYear()<2020) return; const key=d.getFullYear()+'-'+pad(d.getMonth()+1); meses[key]=d.toLocaleString('es-AR',{month:'long',year:'numeric'}); });
   const sel=document.getElementById('sel-mes');
   const keys=Object.keys(meses).sort().reverse();
   if(!keys.length){ const d=new Date(); const key=d.getFullYear()+'-'+pad(d.getMonth()+1); keys.push(key); meses[key]=d.toLocaleString('es-AR',{month:'long',year:'numeric'}); }
@@ -327,23 +342,9 @@ function renderResumen(){
   const sel=document.getElementById('sel-mes').value;
   if(!sel) return;
   const [anio,mes]=sel.split('-').map(Number);
-  const delMes=todosRegistros.filter(r=>{
-    const d=new Date(r.timestamp);
-    return d.getFullYear()===anio&&d.getMonth()+1===mes;
-  });
-
+  const delMes=todosRegistros.filter(r=>{ const d=new Date(r.timestamp); return d.getFullYear()===anio&&d.getMonth()+1===mes; });
   const porEmp={};
-  delMes.forEach(r=>{
-    const hora=r.horaReal||r.hora;
-    if(!porEmp[r.nombre]) porEmp[r.nombre]={ dias:0, tardanzas:[], minsTotales:0 };
-    porEmp[r.nombre].dias++;
-    if(esTarde(hora)){
-      const mins=minTarde(hora);
-      porEmp[r.nombre].tardanzas.push({fecha:new Date(r.timestamp),hora,mins});
-      porEmp[r.nombre].minsTotales+=mins;
-    }
-  });
-
+  delMes.forEach(r=>{ const hora=r.horaReal||r.hora; if(!porEmp[r.nombre]) porEmp[r.nombre]={ dias:0, tardanzas:[], minsTotales:0 }; porEmp[r.nombre].dias++; if(esTarde(hora)){ const mins=minTarde(hora); porEmp[r.nombre].tardanzas.push({fecha:new Date(r.timestamp),hora,mins}); porEmp[r.nombre].minsTotales+=mins; } });
   const tabla=document.getElementById('tabla-resumen');
   const nombres=Object.keys(porEmp).sort();
   if(!nombres.length){ tabla.innerHTML='<div class="vacio">Sin registros para este mes</div>'; }
@@ -356,37 +357,18 @@ function renderResumen(){
       return `<div class="res-row"><span style="font-weight:500;">${n}</span><span style="color:#888;">${e.dias}</span><span style="color:${color};font-weight:500;">${nT}${totalLabel?' · '+totalLabel:''}</span><span style="color:#888;font-size:12px;">${detalle}</span></div>`;
     }).join('');
   }
-
   const detalle=document.getElementById('detalle-mes');
-  detalle.innerHTML=[...delMes].sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp)).map(r=>{
-    const d=new Date(r.timestamp);
-    const hora=r.horaReal||r.hora;
-    const tag=esTarde(hora)?'<span class="tag-tarde">Tarde</span>':'<span class="tag-ok">A tiempo</span>';
-    return `<div class="det-row"><span style="color:#888;">${pad(d.getDate())}/${pad(d.getMonth()+1)}</span><span style="font-weight:500;">${r.nombre}</span><span style="color:#888;font-variant-numeric:tabular-nums;">${hora}</span><span>${tag}</span></div>`;
-  }).join('')||'<div class="vacio">Sin registros</div>';
+  detalle.innerHTML=[...delMes].sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp)).map(r=>{ const d=new Date(r.timestamp); const hora=r.horaReal||r.hora; const tag=esTarde(hora)?'<span class="tag-tarde">Tarde</span>':'<span class="tag-ok">A tiempo</span>'; return `<div class="det-row"><span style="color:#888;">${pad(d.getDate())}/${pad(d.getMonth()+1)}</span><span style="font-weight:500;">${r.nombre}</span><span style="color:#888;font-variant-numeric:tabular-nums;">${hora}</span><span>${tag}</span></div>`; }).join('')||'<div class="vacio">Sin registros</div>';
 }
 
-function exportarDia(){
-  if(!registrosHoy.length){ alert('No hay registros para exportar'); return; }
-  const csv='Nombre,Hora,Estado\n'+registrosHoy.map(r=>{ const hora=r.horaReal||r.hora; return `${r.nombre},${hora},${esTarde(hora)?'Tarde':'A tiempo'}`; }).join('\n');
-  descargar(csv,`ingresos_${new Date().toISOString().slice(0,10)}.csv`);
-}
-function exportarResumen(){
-  const sel=document.getElementById('sel-mes').value;
-  const [anio,mes]=sel.split('-').map(Number);
-  const delMes=todosRegistros.filter(r=>{ const d=new Date(r.timestamp); return d.getFullYear()===anio&&d.getMonth()+1===mes; });
-  if(!delMes.length){ alert('Sin registros para exportar'); return; }
-  const csv='Fecha,Empleado,Hora,Estado\n'+[...delMes].sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp)).map(r=>{
-    const d=new Date(r.timestamp); const hora=r.horaReal||r.hora;
-    return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()},${r.nombre},${hora},${esTarde(hora)?'Tarde':'A tiempo'}`;
-  }).join('\n');
-  descargar(csv,`resumen_${sel}.csv`);
-}
+function exportarDia(){ if(!registrosHoy.length){ alert('No hay registros para exportar'); return; } const csv='Nombre,Hora,Estado\n'+registrosHoy.map(r=>{ const hora=r.horaReal||r.hora; return `${r.nombre},${hora},${esTarde(hora)?'Tarde':'A tiempo'}`; }).join('\n'); descargar(csv,`ingresos_${new Date().toISOString().slice(0,10)}.csv`); }
+function exportarResumen(){ const sel=document.getElementById('sel-mes').value; const [anio,mes]=sel.split('-').map(Number); const delMes=todosRegistros.filter(r=>{ const d=new Date(r.timestamp); return d.getFullYear()===anio&&d.getMonth()+1===mes; }); if(!delMes.length){ alert('Sin registros para exportar'); return; } const csv='Fecha,Empleado,Hora,Estado\n'+[...delMes].sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp)).map(r=>{ const d=new Date(r.timestamp); const hora=r.horaReal||r.hora; return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()},${r.nombre},${hora},${esTarde(hora)?'Tarde':'A tiempo'}`; }).join('\n'); descargar(csv,`resumen_${sel}.csv`); }
 function descargar(csv,nombre){ const a=document.createElement('a'); a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv); a.download=nombre; a.click(); }
 
 setInterval(()=>{ document.getElementById('reloj').textContent=horaStr(); },1000);
 document.getElementById('reloj').textContent=horaStr();
 document.getElementById('fecha').textContent=fechaStr();
+restaurarEstadoTurno();
 cargarDesdeSheets();
 setInterval(cargarDesdeSheets,60000);
 </script>
