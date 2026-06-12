@@ -163,6 +163,7 @@ const CLAVE_EMP = '091218'; // misma clave para gestionar empleados
 const TARDE_H = 9;
 const TARDE_M = 0;
 const MINUTOS_TURNO = 5;
+const EXCLUIR_INASISTENCIAS = ['cristal']; // empleados part-time, no cuentan inasistencias
 
 let empleados = []; // viene de Sheets, compartido
 let registrosHoy = [];
@@ -443,19 +444,20 @@ function renderResumen(){
   else {
     tabla.innerHTML=nombres.map(n=>{
       const diasPresente=presenciasPorEmp[n].size;
-      const inasist=totalDiasLab-diasPresente;
+      const excluido=EXCLUIR_INASISTENCIAS.includes(n.toLowerCase());
+      const inasist=excluido?null:totalDiasLab-diasPresente;
       const td=tardanzasPorEmp[n]||{tardanzas:[],minsTotales:0};
       const nT=td.tardanzas.length;
       const colorT=nT===0?'#3B6D11':nT<=2?'#BA7517':'#A32D2D';
-      const colorI=inasist===0?'#3B6D11':inasist<=2?'#BA7517':'#A32D2D';
+      const colorI=excluido?'#aaa':inasist===0?'#3B6D11':inasist<=2?'#BA7517':'#A32D2D';
       const totalLabel=td.minsTotales>0?(Math.floor(td.minsTotales/60)>0?`${Math.floor(td.minsTotales/60)}h ${td.minsTotales%60}min`:`${td.minsTotales}min`):'';
       const detalle=nT===0?'—':td.tardanzas.map(t=>{ const h=Math.floor(t.mins/60),m=t.mins%60; return `${pad(t.fecha.getDate())}/${pad(t.fecha.getMonth()+1)}: ${h>0?h+'h '+m+'min':m+'min'} tarde`; }).join(' · ');
-      return `<div class="res-row"><span style="font-weight:500;">${n}</span><span style="color:#888;">${diasPresente}/${totalDiasLab}</span><span style="color:${colorI};font-weight:500;">${inasist}</span><span style="color:${colorT};font-weight:500;">${nT}${totalLabel?' · '+totalLabel:''}</span><span style="color:#888;font-size:12px;">${detalle}</span></div>`;
+      return `<div class="res-row"><span style="font-weight:500;">${n}</span><span style="color:#888;">${diasPresente}/${totalDiasLab}</span><span style="color:${colorI};font-weight:500;">${excluido?'—':inasist}</span><span style="color:${colorT};font-weight:500;">${nT}${totalLabel?' · '+totalLabel:''}</span><span style="color:#888;font-size:12px;">${detalle}</span></div>`;
     }).join('');
   }
 
   const tablaInasist=document.getElementById('tabla-inasistencias');
-  const diasConAusentes=diasLab.map(fecha=>{ const key=fechaKey(fecha); const presentes=presenciasPorDia[key]||new Set(); const ausentes=empleados.filter(e=>!presentes.has(e.toLowerCase())); return {fecha,ausentes}; }).filter(d=>d.ausentes.length>0);
+  const diasConAusentes=diasLab.map(fecha=>{ const key=fechaKey(fecha); const presentes=presenciasPorDia[key]||new Set(); const ausentes=empleados.filter(e=>!presentes.has(e.toLowerCase())&&!EXCLUIR_INASISTENCIAS.includes(e.toLowerCase())); return {fecha,ausentes}; }).filter(d=>d.ausentes.length>0);
   const mN=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
   const dN=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
   tablaInasist.innerHTML=!diasConAusentes.length
